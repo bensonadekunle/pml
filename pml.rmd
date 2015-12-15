@@ -1,0 +1,283 @@
+---
+title: Human Activity Recognition
+output:
+  html_document:
+    fig_caption: yes
+    keep_md: yes
+---
+
+```{r predictivemodeling, echo=FALSE, eval=TRUE, results='hide'}
+suppressPackageStartupMessages(require(knitr))
+suppressPackageStartupMessages(require(randomForest))
+
+suppressWarnings(TRUE)
+
+# Obtain the source data for subsequent analysis
+url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+filename <- "pml-training.csv"
+
+if (!file.exists(filename)) {
+    download.file(url = url, destfile = filename, method = "curl", quiet = TRUE)
+}
+
+url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+filename <- "pml-testing.csv"
+
+if (!file.exists(filename)) {
+    download.file(url = url, destfile = filename, method = "curl", quiet = TRUE)
+}
+
+confusionMatrix <- function(p, c) {
+
+cm <- table(p, c, dnn = c("Prediction", "Reference"))
+
+sum.diagonal <- sum(diag(cm))
+sum.off.diagonal <- sum(cm[which(row(cm) != col(cm))])
+total <- sum.diagonal + sum.off.diagonal
+
+accuracy <- sprintf("%.4f", sum.diagonal / total)
+
+model.stats <- suppressWarnings(prop.test(sum.diagonal, total, 0.95))
+ci <- format(suppressWarnings(prop.test(sum.diagonal, total, 0.95))[["conf.int"]][1:2], digits = 4, nsmall = 4)
+
+cm.statistics <- matrix(rep(0.0), 4, 5)
+
+rownames(cm.statistics) <- c('Sensitivity', 'Specificity', 
+                          'Positive Predictive Value', 
+                          'Negative Predictive Value')
+
+colnames(cm.statistics) <- colnames(cm)
+
+sapply(colnames(cm), 
+       function(c) {
+            sensitivity <- cm[c, c] / (cm[c, c] + sum(cm[c, ]) - cm[c, c])
+            specificity <- (total - cm[c, c]) / 
+                            (sum(cm[ , c]) - 2 * cm[c, c] + total)
+            positive.predictive.value <- cm[c, c] / sum(cm[ , c])
+            negative.predictive.value <- (total - cm[c, c]) / (sum(cm[c, ]) - 2 * cm[c, c] + total)
+
+            cm.statistics['Sensitivity', c] <<- 
+                format(sensitivity, digits = 4, nsmall = 4)
+            cm.statistics['Specificity', c] <<- 
+                format(specificity, digits = 4, nsmall = 4)
+            cm.statistics['Positive Predictive Value', c] <<- 
+                format(positive.predictive.value, digits = 4, nsmall = 4)
+            cm.statistics['Negative Predictive Value', c] <<- 
+                format(negative.predictive.value, digits = 4, nsmall = 4)
+        })
+
+colnames(cm.statistics) <- sapply(colnames(cm), 
+                                   function(c) paste("Class", c))
+
+    return(list(cm = cm, accuracy = accuracy, ci = ci, statistics = cm.statistics))
+}
+
+
+training <- read.csv(file = "pml-training.csv", na.strings = c('NA',''), 
+                     stringsAsFactors = FALSE)
+
+nonmissing <- which(!sapply(training, function (x) any(is.na(x))))
+nonmissing <- which(sapply(training, function (x) sum(is.na(x)) < sum(!is.na(x))))
+
+training.predictors <- 
+    names((training[ , nonmissing])[ , grep("belt|arm|dumbbell", 
+                                            names(training[, nonmissing]))])
+
+training <- training[, c('classe', training.predictors)]
+training[, 'classe'] <- as.factor(training$classe)
+
+set.seed(floor(2.718281828))
+
+training.partition <- 0.75
+training.indices <- sample(nrow(training), 
+                           as.integer(0.75 * nrow(training)))
+training.train <- training[training.indices, ]
+training.test  <- training[-training.indices, ]
+
+model <- randomForest(formula = classe~., data = training.train, 
+                       na.action = na.roughfix, replace = FALSE)
+
+training.train.prediction <- predict(model, training.train, type = 'response')
+
+cm0 <- confusionMatrix(training.train.prediction, training.train$classe)
+
+training.test.prediction <- predict(model, training.test, type = 'response')
+
+cm1 <- confusionMatrix(training.test.prediction, training.test$classe)
+
+testing <- read.csv("pml-testing.csv", na.strings=c('NA',''), 
+                    stringsAsFactors = FALSE)
+
+testing <- testing[ , training.predictors]
+testing.prediction <- predict(model, testing, type = 'response')
+testing$classe <- as.character(testing.prediction)
+
+cm2 <- confusionMatrix(testing.prediction, testing$classe)
+predict <- testing.prediction
+
+url <- "http://groupware.les.inf.puc-rio.br/static/WLE/WearableComputing_weight_lifting_exercises_biceps_curl_variations.csv"
+filename <- "pml-master.csv"
+
+if (!file.exists(filename)) {
+    download.file(url = url, destfile = filename, method = "curl", TRUE)
+}
+
+master.testing <- read.csv("pml-master.csv", na.strings=c('NA',''), 
+                    stringsAsFactors = FALSE)
+
+master.testing <- master.testing[ , c('classe', training.predictors)]
+#testing[, 'classe'] <- as.factor(testing$classe)
+master.testing.prediction <- predict(model, master.testing[, -which(colnames(master.testing) == 'classe')], type = 'response')
+master.testing$classe <- as.character(master.testing.prediction)
+
+cm3 <- confusionMatrix(master.testing.prediction, master.testing$classe)
+```
+
+##  Predicting Weight-lifting Styles Determined by Measurement of Exercise Form
+
+### Synopsis
+
+This report describes building a prediction model to identify how participants performed during various weight-lifting routines. Our goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to make these predictions. A subset of the original data set was obtained from the Johns Hopkins University "Reproducible Research" course project. This dataset was originally obtained from the [*Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements*](http://groupware.les.inf.puc-rio.br/har#ixzz34dpS6oks).
+
+For the original study 6 healthy participants performed 5 variations for 1 set of 10 repetitions of unilateral dumbbell bicep curls over the course of 8 hours. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. Class A corresponds to the specified execution of the exercise, while Classes B through E correspond to common mistakes during weight-lifting.
+
+1. exactly according to the specification (Class A),
+2. throwing the elbows to the front (Class B),
+3. lifting the dumbbell only halfway (Class C),
+4. lowering the dumbbell only halfway (Class D), and
+5. throwing the hips to the front (Class E). 
+
+Our model accurately predicts the correct classification for each of the twenty test cases (pml-testing.csv) provided by the instructor. When the model was applied to the full data set (n observations) collected by the researchers an accuracy rate of 100% (95% CI: ) was achieved. The outcomes support the hypothesis that the data provided for the course project was collected under highly-controlled circumstances.
+
+### Introduction
+
+The necessary external R package(s) to perform the data analysis presented in this report:
+
+- randomForest
+- knitr
+
+The randomForest package has been chosen to train the predictive model. A custom 
+implementation of the confusion matrix function has been developed as a learning
+aid in addition to removing any dependency on the caret package.
+
+The R [script](https://github.com/gdhorne/pml/blob/master/pml.r) which produced the results shown in this report is available. The source code in its entirety is embedded in this document to facilitate on-demand calculation. Source code fragments presented in this report focus only on predictor selection, model building and prediction.
+
+### Building the Prediction Model
+
+**Selecting the Predictors**
+
+After reading the data, not shown here, from the comma-separated-values (CSV) file, pml-training.csv, select only those features with fewer NA values than non-NA values and whose names include arm or belt or dumbbell. This strategy reduces the number of predictors and eliminates any predictor with mostly NA values.
+
+    nonmissing <- which(sapply(training, function (x) sum(is.na(x)) < sum(!is.na(x))))
+
+    training.predictors <- 
+    names((training[ , nonmissing])[ , grep("belt|arm|dumbbell", names(training[, nonmissing]))])
+
+    training <- training[, c('classe', training.predictors)]
+    training[, 'classe'] <- as.factor(training$classe)
+
+**Partitioning the Training Data Set to Allow Cross-Validation**
+
+The training data is divided such that `r training.partition * 100`% reserved for training the model and `r (1 - training.partition) * 100`% reserved for cross-validation of the model.
+
+    training.indices <- sample(nrow(training), as.integer(floor(0.75 * nrow(training))))
+    training.train <- training[training.indices, ]
+    training.test  <- training[-training.indices, ]
+
+**Building and Training the Model**
+
+Building the prediction model using the Random Forest machine learning algorithm applied to the training dataset, training.train, enables efficient training and accurate predictions. Missing values in any of the predictor features are imputted by calculating the mean of that predictor.
+
+    model <- randomForest(formula = classe ~ ., data = training.train, na.action = na.roughfix, replace = FALSE)
+
+<u>Model</u>
+
+```{r model, echo=FALSE, comment=NA} 
+model
+```
+
+With the model the manner in which the weight-lifting exercises were performed by the participants can be predicted. As a base-line the model is applied to the training data set.
+
+    training.train.prediction <- predict(model, training.train, type = 'response')
+    confusionMatrix(training.train.prediction, training.train$classe)
+
+<u>Confusion Matrix and Statistics</u>
+
+```{r cm0, echo=FALSE, comment=NA}
+cm0$cm
+```
+
+The in-sample accuracy rate is `r cm0$accuracy` with a 95% confidence interval of [ `r cm0$ci`].
+
+```{r cm0statistics, kable, echo=FALSE, comment=NA}
+kable(cm0$statistics, digits=4)
+```
+
+These results are within expectations because the model is making predictions using the same data with which it was trained.
+
+**Cross-Validation of the Model**
+
+The prediction model using the Random Forest machine learning algorithm applied to the testing dataset, training.test, yields surpringly accurate classification of the manner in which the weight-lifting exercises were performed by the participants. Considering the controlled environment during the weight-lifting exercises we surmise that each of the five styles of activity performance might have been deliberately exaggerated.
+
+    training.test.prediction <- predict(model, training.test, type = 'response')
+    confusionMatrix(training.test.prediction, training.test$classe)
+
+<u>Confusion Matrix and Statistics</u>
+
+```{r cm1, echo=FALSE, comment=NA}
+cm1$cm
+```
+
+The out-of-sample accuracy rate is `r cm1$accuracy` with a 95% confidence interval of [`r cm1$ci`].
+
+```{r cm1statistics, kable, echo=FALSE, comment=NA}
+kable(cm1$statistics, digits=4)
+```
+
+### Making Predictions
+
+**Model Applied to the Held-out Data Set**
+
+The ultimate test of our model's predictive accuracy hinges on correctly classifying the twenty observations held-back. These predictions will be submitted separately for comparison with the reference predictions so the actual predictions are withheld from this report. To view the predictions you can execute the R [script](https://github.com/gdhorne/pml/blob/master/pml.R) and examine this statement: predict <- testing.prediction.
+
+<u>Confusion Matrix and Statistics</u>
+
+```{r cm2, echo=FALSE, comment=NA}
+cm2$cm
+```
+
+The accuracy rate is `r cm2$accuracy` with a 95% confidence interval of [`r cm2$ci`]. The wider confidence interval can be attributed to the sample size (`r nrow(testing)` observations).
+
+```{r cm2statistics, kable, echo=FALSE, comment=NA}
+kable(cm2$statistics, digits=4)
+```
+
+**Model Applied to the Master Weight-Lifting Data Set Collected by the Researchers**
+
+To further test the predictive capability of our model it is applied to the original data set available from the *Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements* project [website](http://groupware.les.inf.puc-rio.br/static/har/dataset-har-PUC-Rio-ugulino.zip).
+
+<u>Confusion Matrix and Statistics</u>
+
+```{r cm3, echo=FALSE, comment=NA}
+cm3$cm
+```
+
+The accuracy rate is `r cm3$accuracy` with a 95% confidence interval of [`r cm3$ci`].
+
+```{r cm3statistics, kable, echo=FALSE, comment=NA}
+kable(cm3$statistics, digits=4)
+```
+
+### Analysis Results
+
+The predictions achieved `r as.numeric(cm2$accuracy) * 100`% accuracy during submission to the automatic grader. This supports the hypothesis that the data provided for the course project was collected under controlled circumstances. The perfect accuracy for the pml-testing.csv data set was expected as a requirement to pass each of the `r nrow(testing)` performance classification test cases.
+
+```{r environmentalcleanup, echo=FALSE, eval=TRUE, results='hide'}
+rm(cm0, cm1, cm2, cm3, filename, model, nonmissing, testing, testing.prediction, 
+   training, training.indices, training.predictors, training.test, 
+   training.test.prediction,training.train, training.train.prediction, url)
+```
+
+### Bibliography
+
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers’ Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6.
